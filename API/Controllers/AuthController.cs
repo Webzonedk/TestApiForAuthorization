@@ -4,10 +4,12 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using System.Diagnostics;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace API.Controllers
 {
@@ -153,5 +155,77 @@ namespace API.Controllers
             // Return the serialized JWT token
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
+
+
+        [Authorize]
+        [HttpPost("refresh-token")]
+        public async Task<ActionResult<string>> RefreshToken()
+        {
+
+            string? refreshToken = Request.Cookies["refreshToken"];
+            Debug.WriteLine(Request.Cookies["refreshToken"]);
+            //string email = _userService.GetMyEmail();
+            User user = _dBContext.GetAdminRefreshToken(refreshToken);
+            //Debug.WriteLine("User: "+user);
+            if (!user.RefreshToken.Equals(refreshToken))
+            {
+                return Unauthorized("Invalid Refresh Token.");
+            }
+            else if (user.TokenExpires < DateTime.Now)
+            {
+                return Unauthorized("Token expired.");
+            }
+
+            string token = CreateToken(user);
+            RefreshToken? newRefreshToken = GenerateRefreshToken();
+            SetRefreshToken(newRefreshToken, user);
+            return Ok(JsonSerializer.Serialize(token));
+        }
+
+
+
+
+
+        private RefreshToken GenerateRefreshToken()
+        {
+            RefreshToken refreshToken = new()
+            {
+                Token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64)),
+                //Expires = DateTime.Now.AddDays(7),
+                Expires = DateTime.Now.AddMinutes(30),
+                Created = DateTime.Now
+            };
+
+            return refreshToken;
+        }
+
+
+
+        /// <summary>
+        /// Setting the refresh token to DB and in the cookie
+        /// </summary>
+        /// <param name="newRefreshToken"></param>
+        private void SetRefreshToken(RefreshToken newRefreshToken, User user)
+        {
+            string email = _userService.GetMyEmail();
+            // User user = _dBContext.GetAdmin(email);
+            //Debug.Write("debugging" + email);
+            CookieOptions cookieOptions = new()
+            {
+                Path = "/", //Added
+                HttpOnly = false,
+                Secure = false, // Added
+                IsEssential = true,
+                SameSite = SameSiteMode.None,
+                Expires = newRefreshToken.Expires
+            };
+            //  Response.Cookies.Append("refreshToken", newRefreshToken.Token, cookieOptions);
+
+            user.RefreshToken = newRefreshToken.Token;
+            user.TokenCreated = newRefreshToken.Created;
+            user.TokenExpires = newRefreshToken.Expires;
+            _dBContext.UpdateAdmin(user);
+        }
+
     }
 }
